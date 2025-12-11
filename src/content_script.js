@@ -1,111 +1,208 @@
-// content_script.js — minimal, stable button injector for testing + production
+// content_script.js — Smart button placement for LLM chat sites
 
 console.log("Prompt Enhancer content script loaded.");
 
 const BUTTON_CLASS = "prompt-enhancer-btn-v1";
+const WRAPPER_CLASS = "prompt-enhancer-wrapper-v1"; // For fallback mode
+const PROCESSED_FLAG = "__promptEnhancerAttached";
+
+// --- Site-Specific Configurations ---
+const SITE_CONFIGS = {
+  "chat.openai.com": {
+    // ChatGPT
+    findTargetElements: () => {
+      const textarea = document.querySelector("textarea#prompt-textarea");
+      if (!textarea) return null;
+      // The send button container is a couple of levels up and then over
+      const form = textarea.closest("form");
+      const sendButton = form?.querySelector('[data-testid="send-button"]');
+      const container = sendButton?.parentElement;
+      return container ? { input: textarea, container: container } : null;
+    },
+    injectionMethod: "insertBefore", // Insert before the send button
+  },
+  "gemini.google.com": {
+    // Google Gemini
+    findTargetElements: () => {
+      const input = document.querySelector(".input-area .ql-editor");
+      if (!input) return null;
+      // Find the parent element that contains both the input and the send button
+      const root = input.closest(".main-content");
+      const container = root?.querySelector(".send-button-container");
+      return container ? { input: input, container: container } : null;
+    },
+    injectionMethod: "appendChild",
+  },
+  "www.perplexity.ai": {
+    // Perplexity
+    findTargetElements: () => {
+        const textarea = document.querySelector("textarea[placeholder*='Ask anything']");
+        if (!textarea) return null;
+        const container = textarea.parentElement?.parentElement?.querySelector('button')?.parentElement;
+        return container ? { input: textarea, container: container} : null;
+    },
+    injectionMethod: "insertBefore"
+  }
+};
 
 /**
- * Creates the floating Enhance button.
+ * Creates the Enhance button.
+ * @param {boolean} isNative - True if the button should have minimal "native" styling.
  */
-function createEnhanceButton() {
+function createEnhanceButton(isNative = false) {
   const btn = document.createElement("button");
   btn.className = BUTTON_CLASS;
-  btn.innerText = "Enhance ✨";
+  btn.title = "Enhance Prompt";
+  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L11.8 9.2a1.21 1.21 0 0 0 0 1.72l5.48 5.48a1.21 1.21 0 0 0 1.72 0l6.84-6.84a1.21 1.21 0 0 0 0-1.72Z"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-2"/><path d="M11 3H9"/><path d="M9 17v-2"/><path d="M3 12h2"/></svg>`;
+  btn.type = "button"; // Prevent form submission
 
-  Object.assign(btn.style, {
-    position: "absolute",
-    zIndex: 2147483647,
-    padding: "6px 10px",
-    fontSize: "12px",
-    borderRadius: "6px",
-    background: "#4b6bff",
-    color: "#fff",
-    border: "none",
-    cursor: "pointer",
-    boxShadow: "0 2px 6px rgba(0,0,0,0.2)"
-  });
+  if (isNative) {
+    // Minimal styling for native look. Assumes host site provides button styles.
+    Object.assign(btn.style, {
+      background: "transparent",
+      border: "none",
+      padding: "8px", // A bit of padding
+      cursor: "pointer",
+      color: "inherit", // Inherit color from parent
+      alignSelf: "center",
+    });
+  } else {
+    // Fallback styling for the wrapper method
+    Object.assign(btn.style, {
+      position: "absolute",
+      zIndex: 1,
+      top: "8px",
+      right: "8px",
+      padding: "4px",
+      borderRadius: "6px",
+      background: "rgba(255, 255, 255, 0.8)",
+      color: "#444",
+      border: "1px solid #ccc",
+      cursor: "pointer",
+    });
+  }
 
   return btn;
 }
 
 /**
- * Attaches the Enhance button to any textarea / input / contenteditable element.
+ * The main function to handle injecting the button on a page.
  */
-function attachButtonToInput(el) {
-  if (el.__promptEnhancerAttached) return; 
-  el.__promptEnhancerAttached = true;
+function initializeEnhancer() {
+  const hostname = window.location.hostname;
+  const config = SITE_CONFIGS[hostname];
 
-  const btn = createEnhanceButton();
-  document.body.appendChild(btn);
+  if (config) {
+    // --- Smart Injection Logic for Known Sites ---
+    const targets = config.findTargetElements();
+    if (targets && targets.container && targets.input && !targets.container[PROCESSED_FLAG]) {
+        targets.container[PROCESSED_FLAG] = true;
+        
+        const btn = createEnhanceButton(true);
+        
+        if (config.injectionMethod === "insertBefore") {
+            const referenceNode = targets.container.firstChild;
+            targets.container.insertBefore(btn, referenceNode);
+        } else {
+            targets.container.appendChild(btn);
+        }
 
-  function positionButton() {
-    const r = el.getBoundingClientRect();
-    btn.style.top = `${window.scrollY + r.top + 8}px`;
-    btn.style.left = `${window.scrollX + r.right - btn.offsetWidth - 8}px`;
+        addClickHandler(btn, targets.input);
+    }
+  } else {
+    // --- Fallback Logic for Unknown Sites ---
+    const fields = document.querySelectorAll("textarea, input[type='text'], [contenteditable='true']");
+    fields.forEach((el) => {
+      if (el.offsetWidth < 80 || el.offsetHeight < 25) return;
+      if (el[PROCESSED_FLAG] || el.closest(`.${WRAPPER_CLASS}`)) return;
+      
+      el[PROCESSED_FLAG] = true;
+      attachButtonAsWrapper(el);
+    });
   }
-
-  // Initial placement
-  positionButton();
-
-  // Reposition on scroll/resize
-  window.addEventListener("scroll", positionButton);
-  window.addEventListener("resize", positionButton);
-
-  // Click → send prompt to service worker
-  btn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-
-    const text = el.value || el.innerText || "";
-    if (!text.trim()) {
-      alert("Type something first before enhancing.");
-      return;
-    }
-
-    if (!confirm("Your prompt will be sent to Gemini for enhancement. Continue?")) return;
-
-    btn.disabled = true;
-    btn.innerText = "Enhancing…";
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: "ENHANCE_PROMPT",
-        prompt: text
-      });
-
-      if (response.error) {
-        alert("Error: " + response.error);
-      } else if (response.enhanced) {
-        if ("value" in el) el.value = response.enhanced;
-        else el.innerText = response.enhanced;
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Enhancer Error: " + err.message);
-    } finally {
-      btn.disabled = false;
-      btn.innerText = "Enhance ✨";
-    }
-  });
 }
 
 /**
- * Scans the page for input fields and attaches buttons.
+ * Fallback method: wraps the input field and adds the button inside.
+ * @param {HTMLElement} el - The input element.
  */
-function scanForInputs() {
-  const fields = document.querySelectorAll(
-    "textarea, input[type='text'], [contenteditable='true']"
-  );
+function attachButtonAsWrapper(el) {
+  const wrapper = document.createElement("div");
+  wrapper.className = WRAPPER_CLASS;
+  wrapper.style.position = "relative";
+  const elStyle = window.getComputedStyle(el);
+  wrapper.style.display = elStyle.display === "inline" ? "inline-block" : elStyle.display;
+  
+  el.parentNode.insertBefore(wrapper, el);
+  wrapper.appendChild(el);
 
-  fields.forEach((el) => {
-    if (el.offsetWidth < 80 || el.offsetHeight < 25) return;
-    attachButtonToInput(el);
+  const btn = createEnhanceButton(false);
+  wrapper.appendChild(btn);
+
+  addClickHandler(btn, el);
+}
+
+/**
+ * Centralized click handler logic for the enhance button.
+ * @param {HTMLButtonElement} btn - The enhance button.
+ * @param {HTMLElement} inputEl - The associated input/textarea element.
+ */
+function addClickHandler(btn, inputEl) {
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    const text = inputEl.value || inputEl.innerText || "";
+    if (!text.trim()) {
+      alert("Please enter some text to enhance.");
+      return;
+    }
+
+    btn.disabled = true;
+    const originalIcon = btn.innerHTML;
+    btn.innerHTML = "⏳";
+    btn.title = "Enhancing...";
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'ENHANCE_PROMPT', prompt: text });
+
+      if (response && response.enhanced) {
+        if ('value' in inputEl) {
+          inputEl.value = response.enhanced;
+        } else {
+          inputEl.innerText = response.enhanced;
+        }
+        const event = new Event('input', { bubbles: true, cancelable: true });
+        inputEl.dispatchEvent(event);
+      }
+
+      if (response && response.error) {
+        alert(`Error: ${response.error}`);
+      }
+    } catch (err) {
+      alert(`An unexpected error occurred: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalIcon;
+      btn.title = "Enhance Prompt";
+    }
   });
 }
 
-// Initial scan
-scanForInputs();
+// --- Main Execution ---
 
-// Watch future DOM changes (for ChatGPT / Gemini dynamic UIs)
-const observer = new MutationObserver(scanForInputs);
-observer.observe(document.body, { childList: true, subtree: true });
+// Use a MutationObserver to detect when chat UIs are loaded, as they are often dynamic.
+const observer = new MutationObserver((mutations) => {
+    // Use debounce to avoid running on every tiny DOM change
+    let timeout;
+    clearTimeout(timeout);
+    timeout = setTimeout(initializeEnhancer, 500);
+});
 
+observer.observe(document.body, {
+  childList: true,
+  subtree: true,
+});
+
+// Initial run
+initializeEnhancer();

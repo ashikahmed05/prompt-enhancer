@@ -1,0 +1,19 @@
+{
+"manifest_version": 3,
+"name": "Prompt Enhancer",
+"description": "One-click prompt enhancer overlay for LLM input boxes (uses user's Gemini key securely)",
+"version": "1.0.0",
+"icons": { "48": "assets/icon.png" },
+"permissions": ["storage", "activeTab", "scripting"],
+"host_permissions": ["https://chat.openai.com/*","https://chat.google.com/*","https://*.perplexity.ai/*","https://*.google.com/*","https://*.openai.com/*"],
+"action": { "default_popup": "src/popup.html", "default_title": "Prompt Enhancer" },
+"options_page": "src/options.html",
+"background": { "service_worker": "src/service_worker.js" },
+"content_scripts": [
+{
+"matches": ["<all_urls>"],
+"js": ["src/content_script.js"],
+"run_at": "document_idle"
+}
+]
+}
